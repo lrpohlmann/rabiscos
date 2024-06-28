@@ -5,9 +5,16 @@
 #include <unistd.h>
 
 void crash(char *e) {
+  write(STDOUT_FILENO, "\x1b[2J", 4);
+  write(STDOUT_FILENO, "\x1b[H", 3);
   perror(e);
   exit(1);
 }
+
+typedef struct {
+  int x;
+  int y;
+} PosicaoCursor;
 
 typedef struct {
   int numero_caracteres;
@@ -24,7 +31,17 @@ typedef struct {
   char *buf;
 } OutputBuffer;
 
-void AtualizarTela(Texto *txt) {
+void AtualizarTela(Texto *txt, PosicaoCursor *cursor) {
+  int ok = write(STDOUT_FILENO, "\x1b[2J", 4);
+  if (ok == -1) {
+    crash("write");
+  }
+
+  ok = write(STDOUT_FILENO, "\x1b[H", 3);
+  if (ok == -1) {
+    crash("write");
+  }
+
   OutputBuffer b;
   b.tamanho = 0;
   b.buf = NULL;
@@ -36,10 +53,15 @@ void AtualizarTela(Texto *txt) {
     b.tamanho += l->numero_caracteres;
   }
 
-  int ok = write(STDOUT_FILENO, b.buf, b.tamanho);
+  ok = write(STDOUT_FILENO, b.buf, b.tamanho);
   if (ok == -1) {
     crash("write");
   }
+
+  char recolocar_cursor[7];
+  snprintf(recolocar_cursor, sizeof(recolocar_cursor), "\x1b[%d;%dH", cursor->y,
+           cursor->x);
+  write(STDOUT_FILENO, recolocar_cursor, sizeof(recolocar_cursor));
 
   free(b.buf);
 }
@@ -109,11 +131,12 @@ int main(int argc, char *argv[]) {
   }
   T_Setup();
 
-  Texto txt;
-  txt.numero_linhas = 0;
-  txt.linhas = (Linha *)malloc(sizeof(Linha));
+  PosicaoCursor c = {.x = 2, .y = 3};
+
+  Texto txt = {.numero_linhas = 0, .linhas = (Linha *)malloc(sizeof(Linha))};
+
   AbrirArquivo(argv[1], &txt);
-  AtualizarTela(&txt);
+  AtualizarTela(&txt, &c);
   while (1) {
     char caractere_recebido = '\0';
     int bytes_lidos = read(STDIN_FILENO, &caractere_recebido, 1);
@@ -122,6 +145,8 @@ int main(int argc, char *argv[]) {
     }
 
     if (caractere_recebido == 'q') {
+      write(STDOUT_FILENO, "\x1b[2J", 4);
+      write(STDOUT_FILENO, "\x1b[H", 3);
       exit(0);
     } else if (caractere_recebido == '\x1b') {
       char proximos_caracteres[3];
@@ -153,7 +178,7 @@ int main(int argc, char *argv[]) {
     } else {
     }
 
-    AtualizarTela(&txt);
+    AtualizarTela(&txt, &c);
   }
   return 0;
 }
