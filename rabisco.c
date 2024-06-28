@@ -131,12 +131,12 @@ int main(int argc, char *argv[]) {
   }
   T_Setup();
 
-  PosicaoCursor c = {.x = 2, .y = 3};
+  PosicaoCursor cursor = {.x = 2, .y = 3};
 
   Texto txt = {.numero_linhas = 0, .linhas = (Linha *)malloc(sizeof(Linha))};
 
   AbrirArquivo(argv[1], &txt);
-  AtualizarTela(&txt, &c);
+  AtualizarTela(&txt, &cursor);
   while (1) {
     char caractere_recebido = '\0';
     int bytes_lidos = read(STDIN_FILENO, &caractere_recebido, 1);
@@ -163,22 +163,26 @@ int main(int argc, char *argv[]) {
       if (proximos_caracteres[0] == '[') {
         switch (proximos_caracteres[1]) {
         case 'A':
+          cursor.y--;
           break;
 
         case 'B':
+          cursor.y++;
           break;
 
         case 'C':
+          cursor.x++;
           break;
 
         case 'D':
+          cursor.x--;
           break;
         }
       }
     } else {
     }
 
-    AtualizarTela(&txt, &c);
+    AtualizarTela(&txt, &cursor);
   }
   return 0;
 }
