@@ -1,15 +1,23 @@
+#include <asm-generic/ioctls.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
 void crash(char *e) {
-  write(STDOUT_FILENO, "\x1b[2J", 4);
-  write(STDOUT_FILENO, "\x1b[H", 3);
+  int ok = 0;
+  ok = write(STDOUT_FILENO, "\x1b[2J", 4);
+  ok = write(STDOUT_FILENO, "\x1b[H", 3);
   perror(e);
   exit(1);
 }
+
+typedef struct {
+  int linhas;
+  int colunas;
+} Terminal;
 
 typedef struct {
   int x;
@@ -49,6 +57,9 @@ void AtualizarTela(Texto *txt, PosicaoCursor *cursor) {
   for (int i = 0; i < txt->numero_linhas; i++) {
     Linha *l = &txt->linhas[i];
     b.buf = (char *)realloc(b.buf, b.tamanho + l->numero_caracteres);
+    if (b.buf == NULL) {
+      crash("realloc");
+    }
     memcpy(&b.buf[b.tamanho], l->caracteres, l->numero_caracteres);
     b.tamanho += l->numero_caracteres;
   }
@@ -59,9 +70,15 @@ void AtualizarTela(Texto *txt, PosicaoCursor *cursor) {
   }
 
   char recolocar_cursor[7];
-  snprintf(recolocar_cursor, sizeof(recolocar_cursor), "\x1b[%d;%dH", cursor->y,
-           cursor->x);
-  write(STDOUT_FILENO, recolocar_cursor, sizeof(recolocar_cursor));
+  ok = snprintf(recolocar_cursor, sizeof(recolocar_cursor), "\x1b[%d;%dH",
+                cursor->y, cursor->x);
+  if (ok == -1) {
+    crash("write");
+  }
+  ok = write(STDOUT_FILENO, recolocar_cursor, sizeof(recolocar_cursor));
+  if (ok == -1) {
+    crash("write");
+  }
 
   free(b.buf);
 }
@@ -83,6 +100,9 @@ void AbrirArquivo(char *caminho, Texto *txt) {
       txt->linhas = (Linha *)realloc(txt->linhas, sizeof(Linha) * (l + 1));
 
       txt->linhas[l].caracteres = (char *)malloc(n);
+      if (txt->linhas[l].caracteres == NULL) {
+        crash("malloc");
+      }
       txt->linhas[l].caracteres = memcpy(txt->linhas[l].caracteres, linha, n);
       txt->linhas[l].numero_caracteres = caracteres_lidos + 1;
       txt->linhas[l].caracteres[txt->linhas[l].numero_caracteres] = '\0';
@@ -107,7 +127,7 @@ void T_Reset() {
   }
 }
 
-void T_Setup() {
+void T_Setup(Terminal *terminal) {
   int ok = tcgetattr(STDIN_FILENO, &T);
   if (ok == -1) {
     crash("tcsetattr");
@@ -121,6 +141,15 @@ void T_Setup() {
   if (ok == -1) {
     crash("tcsetattr");
   }
+
+  struct winsize tamanho;
+  ok = ioctl(STDOUT_FILENO, TIOCGWINSZ, &tamanho);
+  if (ok == -1) {
+    crash("ioctl");
+  }
+
+  terminal->colunas = tamanho.ws_col;
+  terminal->linhas = tamanho.ws_row;
 }
 
 /*** main ***/
@@ -129,7 +158,9 @@ int main(int argc, char *argv[]) {
   if (argc < 2) {
     exit(0);
   }
-  T_Setup();
+
+  Terminal terminal = {.linhas = 0, .colunas = 0};
+  T_Setup(&terminal);
 
   PosicaoCursor cursor = {.x = 2, .y = 3};
 
@@ -145,8 +176,15 @@ int main(int argc, char *argv[]) {
     }
 
     if (caractere_recebido == 'q') {
-      write(STDOUT_FILENO, "\x1b[2J", 4);
-      write(STDOUT_FILENO, "\x1b[H", 3);
+      int ok = 0;
+      ok = write(STDOUT_FILENO, "\x1b[2J", 4);
+      if (ok == -1) {
+        crash("write");
+      }
+      ok = write(STDOUT_FILENO, "\x1b[H", 3);
+      if (ok == -1) {
+        crash("write");
+      }
       exit(0);
     } else if (caractere_recebido == '\x1b') {
       char proximos_caracteres[3];
