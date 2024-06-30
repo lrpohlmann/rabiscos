@@ -40,10 +40,7 @@ typedef struct {
 } OutputBuffer;
 
 void AtualizarTela(Texto *txt, PosicaoCursor *cursor) {
-  int ok = write(STDOUT_FILENO, "\x1b[2J", 4);
-  if (ok == -1) {
-    crash("write");
-  }
+  int ok = 0;
 
   ok = write(STDOUT_FILENO, "\x1b[H", 3);
   if (ok == -1) {
@@ -150,6 +147,10 @@ void T_Setup(Terminal *terminal) {
 
   terminal->colunas = tamanho.ws_col;
   terminal->linhas = tamanho.ws_row;
+  ok = write(STDOUT_FILENO, "\x1b[2J", 4);
+  if (ok == -1) {
+    crash("write");
+  }
 }
 
 /*** main ***/
