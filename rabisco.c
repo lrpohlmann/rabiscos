@@ -201,19 +201,27 @@ int main(int argc, char *argv[]) {
       if (proximos_caracteres[0] == '[') {
         switch (proximos_caracteres[1]) {
         case 'A':
-          cursor.y--;
+          if (cursor.y > 1) {
+            cursor.y--;
+          }
           break;
 
         case 'B':
-          cursor.y++;
+          if (cursor.y <= terminal.linhas) {
+            cursor.y++;
+          }
           break;
 
         case 'C':
-          cursor.x++;
+          if (cursor.x <= terminal.colunas) {
+            cursor.x++;
+          }
           break;
 
         case 'D':
-          cursor.x--;
+          if (cursor.x > 1) {
+            cursor.x--;
+          }
           break;
         }
       }
