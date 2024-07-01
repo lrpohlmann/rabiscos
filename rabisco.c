@@ -6,6 +6,19 @@
 #include <termios.h>
 #include <unistd.h>
 
+void log_tamanho_terminal(int col, int lin) {
+  FILE *log = fopen("term.log", "w+");
+  if (log != NULL) {
+    int ok = 0;
+    char msg[80];
+    int msg_tamanho = 0;
+    msg_tamanho =
+        snprintf(msg, sizeof(msg), "linhas/colunas: %d/%d\n", lin, col);
+    fwrite(msg, msg_tamanho, 1, log);
+    fclose(log);
+  }
+}
+
 void crash(char *e) {
   int ok = 0;
   ok = write(STDOUT_FILENO, "\x1b[2J", 4);
@@ -39,7 +52,7 @@ typedef struct {
   char *buf;
 } OutputBuffer;
 
-void AtualizarTela(Texto *txt, PosicaoCursor *cursor) {
+void AtualizarTela(Texto *txt, PosicaoCursor *cursor, Terminal *terminal) {
   int ok = 0;
 
   ok = write(STDOUT_FILENO, "\x1b[H", 3);
@@ -51,14 +64,24 @@ void AtualizarTela(Texto *txt, PosicaoCursor *cursor) {
   b.tamanho = 0;
   b.buf = NULL;
 
-  for (int i = 0; i < txt->numero_linhas; i++) {
-    Linha *l = &txt->linhas[i];
-    b.buf = (char *)realloc(b.buf, b.tamanho + l->numero_caracteres);
-    if (b.buf == NULL) {
-      crash("realloc");
+  for (int i = 0; i < terminal->linhas; i++) {
+    if (i < txt->numero_linhas) {
+      Linha *l = &txt->linhas[i];
+      b.buf = (char *)realloc(b.buf, b.tamanho + l->numero_caracteres);
+      if (b.buf == NULL) {
+        crash("realloc");
+      }
+      memcpy(&b.buf[b.tamanho], l->caracteres, l->numero_caracteres);
+      b.tamanho += l->numero_caracteres;
+    } else {
+      char til[] = "~\n";
+      b.buf = (char *)realloc(b.buf, b.tamanho + 2);
+      if (b.buf == NULL) {
+        crash("realloc");
+      }
+      memcpy(&b.buf[b.tamanho], &til, 2);
+      b.tamanho += 2;
     }
-    memcpy(&b.buf[b.tamanho], l->caracteres, l->numero_caracteres);
-    b.tamanho += l->numero_caracteres;
   }
 
   ok = write(STDOUT_FILENO, b.buf, b.tamanho);
@@ -162,13 +185,13 @@ int main(int argc, char *argv[]) {
 
   Terminal terminal = {.linhas = 0, .colunas = 0};
   T_Setup(&terminal);
-
+  log_tamanho_terminal(terminal.colunas, terminal.linhas);
   PosicaoCursor cursor = {.x = 2, .y = 3};
 
   Texto txt = {.numero_linhas = 0, .linhas = (Linha *)malloc(sizeof(Linha))};
 
   AbrirArquivo(argv[1], &txt);
-  AtualizarTela(&txt, &cursor);
+  AtualizarTela(&txt, &cursor, &terminal);
   while (1) {
     char caractere_recebido = '\0';
     int bytes_lidos = read(STDIN_FILENO, &caractere_recebido, 1);
@@ -229,7 +252,7 @@ int main(int argc, char *argv[]) {
     } else {
     }
 
-    AtualizarTela(&txt, &cursor);
+    AtualizarTela(&txt, &cursor, &terminal);
   }
   return 0;
 }
