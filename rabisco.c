@@ -7,31 +7,9 @@
 #include <termios.h>
 #include <unistd.h>
 
-void log_tamanho_terminal(int col, int lin) {
-  FILE *log = fopen("term.log", "w+");
-  if (log != NULL) {
-    int ok = 0;
-    char msg[80];
-    int msg_tamanho = 0;
-    msg_tamanho =
-        snprintf(msg, sizeof(msg), "linhas/colunas: %d/%d\n", lin, col);
-    fwrite(msg, msg_tamanho, 1, log);
-    fclose(log);
-  }
-}
-
-void crash(char *e) {
-  int ok = 0;
-  ok = write(STDOUT_FILENO, "\x1b[2J", 4);
-  ok = write(STDOUT_FILENO, "\x1b[H", 3);
-  perror(e);
-  exit(1);
-}
-
-typedef struct {
-  int linhas;
-  int colunas;
-} Terminal;
+#include "crash.h"
+#include "menu.h"
+#include "term.h"
 
 typedef struct {
   int x;
@@ -154,65 +132,16 @@ void AbrirArquivo(char *caminho, Texto *txt) {
   }
 }
 
-/*** Terminal ***/
-
-struct termios T;
-
-void T_Reset() {
-  int ok = tcsetattr(STDIN_FILENO, TCSAFLUSH, &T);
-  if (ok == -1) {
-    crash("tcsetattr");
-  }
-}
-
-void T_Setup(Terminal *terminal) {
-  int ok = tcgetattr(STDIN_FILENO, &T);
-  if (ok == -1) {
-    crash("tcsetattr");
-  }
-
-  atexit(T_Reset);
-  struct termios T_config = T;
-  T_config.c_lflag &= ~(ICANON | ECHO);
-  T_config.c_oflag &= ~(OPOST);
-  T_config.c_iflag &= ~(ICRNL);
-
-  ok = tcsetattr(STDIN_FILENO, TCSAFLUSH, &T_config);
-  if (ok == -1) {
-    crash("tcsetattr");
-  }
-
-  struct winsize tamanho;
-  ok = ioctl(STDOUT_FILENO, TIOCGWINSZ, &tamanho);
-  if (ok == -1) {
-    crash("ioctl");
-  }
-
-  terminal->colunas = tamanho.ws_col;
-  terminal->linhas = tamanho.ws_row;
-}
-
-/*** main ***/
-
-int main(int argc, char *argv[]) {
-  if (argc < 2) {
-    exit(0);
-  }
-
-  Terminal terminal = {.linhas = 0, .colunas = 0};
-  T_Setup(&terminal);
-
+void Editor(char *arquivo, Terminal *terminal) {
   TextoAberto ta = {.cursor = {.x = 1, .y = 1},
                     .txt = {.numero_linhas = 0,
                             .linha_no_topo_da_tela = 0,
                             .coluna_no_inicio_da_tela = 0,
                             .linhas = (Linha *)malloc(sizeof(Linha))}};
 
-  log_tamanho_terminal(terminal.colunas, terminal.linhas);
-
-  AbrirArquivo(argv[1], &ta.txt);
+  AbrirArquivo(arquivo, &ta.txt);
   while (1) {
-    AtualizarTela(&ta.txt, &ta.cursor, &terminal);
+    AtualizarTela(&ta.txt, &ta.cursor, terminal);
     char caractere_recebido = '\0';
     int bytes_lidos = read(STDIN_FILENO, &caractere_recebido, 1);
     if (bytes_lidos == -1) {
@@ -255,8 +184,8 @@ int main(int argc, char *argv[]) {
             linha_texto_onde_cursor_esta->numero_caracteres -
             ta.txt.coluna_no_inicio_da_tela;
 
-        assert(ta.cursor.y > 0 && ta.cursor.y <= terminal.linhas);
-        assert(ta.cursor.x > 0 && ta.cursor.x <= terminal.colunas);
+        assert(ta.cursor.y > 0 && ta.cursor.y <= terminal->linhas);
+        assert(ta.cursor.x > 0 && ta.cursor.x <= terminal->colunas);
 
         switch (proximos_caracteres[1]) {
         case 'A':
@@ -268,14 +197,14 @@ int main(int argc, char *argv[]) {
           break;
 
         case 'B':
-          if (ta.cursor.y < terminal.linhas &&
+          if (ta.cursor.y < terminal->linhas &&
               (indice_linha_cursor < ta.txt.numero_linhas)) {
             ta.cursor.y++;
             break;
           }
 
           if ((ta.txt.linha_no_topo_da_tela < ta.txt.numero_linhas) &&
-              (terminal.linhas + ta.txt.linha_no_topo_da_tela <
+              (terminal->linhas + ta.txt.linha_no_topo_da_tela <
                ta.txt.numero_linhas)) {
             ta.txt.linha_no_topo_da_tela++;
             break;
@@ -284,7 +213,7 @@ int main(int argc, char *argv[]) {
 
         case 'C':
           if ((ta.cursor.x < numero_de_caracteres_menos_offset_coluna + 1) &&
-              (ta.cursor.x < terminal.colunas)) {
+              (ta.cursor.x < terminal->colunas)) {
             ta.cursor.x++;
             break;
           }
@@ -292,7 +221,7 @@ int main(int argc, char *argv[]) {
           if (ta.cursor.x >= numero_de_caracteres_menos_offset_coluna + 1 &&
               (indice_linha_cursor < ta.txt.numero_linhas)) {
             ta.cursor.x = 1;
-            if (ta.cursor.y == terminal.linhas) {
+            if (ta.cursor.y == terminal->linhas) {
               ta.txt.linha_no_topo_da_tela++;
             } else {
               ta.cursor.y++;
@@ -301,7 +230,7 @@ int main(int argc, char *argv[]) {
           }
 
           if ((numero_de_caracteres_menos_offset_coluna + 1 > ta.cursor.x) &&
-              (ta.cursor.x == terminal.colunas)) {
+              (ta.cursor.x == terminal->colunas)) {
             ta.txt.coluna_no_inicio_da_tela++;
             break;
           }
@@ -329,7 +258,7 @@ int main(int argc, char *argv[]) {
 
             int diferenca_numero_caracteres_vs_tela =
                 ta.txt.linhas[indice_linha_cursor].numero_caracteres + 1 -
-                terminal.colunas;
+                terminal->colunas;
             if (diferenca_numero_caracteres_vs_tela > 0) {
               ta.txt.coluna_no_inicio_da_tela =
                   diferenca_numero_caracteres_vs_tela;
@@ -348,5 +277,21 @@ int main(int argc, char *argv[]) {
       }
     }
   }
+}
+
+/*** main ***/
+
+int main(int argc, char *argv[]) {
+  Terminal terminal = {.linhas = 0, .colunas = 0};
+  T_Setup(&terminal);
+
+  char *buf_nome_arquivo;
+  if (argc < 2) {
+    Menu(&terminal, &buf_nome_arquivo);
+    Editor(buf_nome_arquivo, &terminal);
+  } else {
+    Editor(argv[1], &terminal);
+  }
+
   return 0;
 }

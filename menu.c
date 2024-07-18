@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <glob.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,15 +7,14 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include "crash.h"
+#include "menu.h"
+#include "term.h"
+
 typedef struct {
   int x;
   int y;
 } PosicaoCursor;
-
-typedef struct {
-  int linhas;
-  int colunas;
-} Terminal;
 
 typedef struct {
   int y_offset;
@@ -40,31 +40,12 @@ typedef struct {
     }                                                                          \
   }
 
-void crash(char *e) {
-  int ok = 0;
-  ok = write(STDOUT_FILENO, "\x1b[2J", 4);
-  ok = write(STDOUT_FILENO, "\x1b[H", 3);
-  perror(e);
-  exit(1);
-}
-
-struct termios T;
-
-void T_Reset() {
-  int ok = tcsetattr(STDIN_FILENO, TCSAFLUSH, &T);
-  if (ok == -1) {
-    crash("tcsetattr");
-  }
-  ok = write(STDOUT_FILENO, "\x1b[2J", 4);
-  ok = write(STDOUT_FILENO, "\x1b[H", 3);
-}
-
 typedef struct {
   int tamanho;
   char *buf;
 } OutputBuffer;
 
-void EscreverBufferTela(OutputBuffer *b, char *texto, int tamanho) {
+void Menu_EscreverBufferTela(OutputBuffer *b, char *texto, int tamanho) {
   char *novo_buf = (char *)realloc(b->buf, b->tamanho + tamanho);
   memcpy(&novo_buf[b->tamanho], texto, tamanho);
 
@@ -72,58 +53,39 @@ void EscreverBufferTela(OutputBuffer *b, char *texto, int tamanho) {
   b->tamanho += tamanho;
 }
 
-void AtualizarTela(ContextoMenu *m, Terminal *terminal) {
-  write(STDOUT_FILENO, "\x1b[H", 3);
-
+void Menu_AtualizarTela(ContextoMenu *m, Terminal *terminal) {
   OutputBuffer b = {.tamanho = 0, .buf = NULL};
 
+  Menu_EscreverBufferTela(&b, "\x1b[H", 3);
   for (int i = 0; i < terminal->linhas; i++) {
-    if (i < m->quantidade_arquivos) {
-      EscreverBufferTela(&b, m->arquivos[i].nome, m->arquivos[i].tamanho_nome);
+    int j = i + m->jt.y_offset;
+    if (j < m->quantidade_arquivos) {
+      Menu_EscreverBufferTela(&b, m->arquivos[j].nome,
+                              m->arquivos[j].tamanho_nome);
     } else {
-      EscreverBufferTela(&b, "~", 1);
+      Menu_EscreverBufferTela(&b, "-", 1);
     }
 
-    EscreverBufferTela(&b, "\x1b[K", 3);
+    Menu_EscreverBufferTela(&b, "\x1b[K", 3);
     if (i < terminal->linhas - 1) {
-      EscreverBufferTela(&b, "\r\n", 2);
+      Menu_EscreverBufferTela(&b, "\r\n", 2);
     }
   }
 
   char posicionar_cursor[32];
   snprintf(posicionar_cursor, 32, "\x1b[%d;%dH", m->cursor.y, m->cursor.x);
-  EscreverBufferTela(&b, posicionar_cursor, strlen(posicionar_cursor));
+  Menu_EscreverBufferTela(&b, posicionar_cursor, strlen(posicionar_cursor));
 
   write(STDOUT_FILENO, b.buf, b.tamanho);
 
   free(b.buf);
 }
 
-void T_Setup(Terminal *terminal) {
-  int ok = tcgetattr(STDIN_FILENO, &T);
-  if (ok == -1) {
-    crash("tcsetattr");
-  }
-
-  atexit(T_Reset);
-  struct termios T_config = T;
-  T_config.c_lflag &= ~(ICANON | ECHO);
-  T_config.c_oflag &= ~(OPOST);
-  T_config.c_iflag &= ~(ICRNL);
-
-  ok = tcsetattr(STDIN_FILENO, TCSAFLUSH, &T_config);
-  if (ok == -1) {
-    crash("tcsetattr");
-  }
-
-  struct winsize tamanho;
-  ok = ioctl(STDOUT_FILENO, TIOCGWINSZ, &tamanho);
-  if (ok == -1) {
-    crash("ioctl");
-  }
-
-  terminal->colunas = tamanho.ws_col;
-  terminal->linhas = tamanho.ws_row;
+void Menu_ValidarNavegacao(ContextoMenu *m, Terminal *terminal) {
+  assert(m->jt.y_offset >= 0);
+  assert(m->cursor.y > 0);
+  assert(m->cursor.y <= terminal->linhas);
+  assert(m->jt.y_offset + m->cursor.y < m->quantidade_arquivos + 1);
 }
 
 void Menu(Terminal *terminal, char **buf_nome_arquivo) {
@@ -146,7 +108,7 @@ void Menu(Terminal *terminal, char **buf_nome_arquivo) {
   globfree(&files);
 
   while (1) {
-    AtualizarTela(&m, terminal);
+    Menu_AtualizarTela(&m, terminal);
     char caractere_lido = '\0';
     int ok = read(STDIN_FILENO, &caractere_lido, 1);
     if (ok == -1) {
@@ -154,28 +116,37 @@ void Menu(Terminal *terminal, char **buf_nome_arquivo) {
     }
 
     if (caractere_lido == 'q') {
+      write(STDOUT_FILENO, "\x1b[2J", 4);
+      write(STDOUT_FILENO, "\x1b[H", 3);
       exit(0);
     } else if (caractere_lido == '\x1b') {
       char proximos_caracteres[2];
       read(STDIN_FILENO, &proximos_caracteres[0], 1);
       read(STDIN_FILENO, &proximos_caracteres[1], 1);
       if (proximos_caracteres[0] == '[') {
+        Menu_ValidarNavegacao(&m, terminal);
         switch (proximos_caracteres[1]) {
         case 'A':
           if (m.cursor.y > 1) {
             m.cursor.y--;
+          } else if ((m.cursor.y == 1) && (m.jt.y_offset > 0)) {
+            m.jt.y_offset--;
           }
           break;
 
         case 'B':
-          if (m.cursor.y < m.quantidade_arquivos) {
-            m.cursor.y++;
+          if (m.cursor.y + m.jt.y_offset < m.quantidade_arquivos) {
+            if (m.cursor.y < terminal->linhas) {
+              m.cursor.y++;
+            } else {
+              m.jt.y_offset++;
+            }
           }
           break;
         }
       }
     } else if (caractere_lido == '\r') {
-      int escolhido = m.cursor.y - 1;
+      int escolhido = m.jt.y_offset + m.cursor.y - 1;
       char *buf = (char *)malloc(m.arquivos[escolhido].tamanho_nome);
       *buf_nome_arquivo = buf;
       strncpy(*buf_nome_arquivo, m.arquivos[escolhido].nome,
@@ -188,20 +159,4 @@ void Menu(Terminal *terminal, char **buf_nome_arquivo) {
       break;
     }
   }
-}
-
-int main() {
-  Terminal terminal = {.linhas = 0, .colunas = 0};
-  T_Setup(&terminal);
-
-  write(STDOUT_FILENO, "\x1b[2J", 4);
-  write(STDOUT_FILENO, "\x1b[H", 3);
-
-  char *buf_nome_arquivo = NULL;
-  Menu(&terminal, &buf_nome_arquivo);
-  write(STDOUT_FILENO, "\x1b[2J", 4);
-  write(STDOUT_FILENO, "\x1b[H", 3);
-  write(STDOUT_FILENO, buf_nome_arquivo, strlen(buf_nome_arquivo));
-  sleep(2);
-  return 0;
 }
