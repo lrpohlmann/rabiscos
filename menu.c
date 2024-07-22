@@ -17,7 +17,13 @@ typedef struct {
 } PosicaoCursor;
 
 typedef struct {
+  int inicio;
+  int fim;
+} AreaTexto;
+
+typedef struct {
   int y_offset;
+  AreaTexto area_texto;
 } JanelaTexto;
 
 typedef struct {
@@ -32,18 +38,20 @@ typedef struct {
   JanelaTexto jt;
 } ContextoMenu;
 
-#define INIT_CONTEXTOMENU                                                      \
-  {                                                                            \
-    .arquivos = NULL, .quantidade_arquivos = 0, .cursor = {.x = 1, .y = 1},    \
-    .jt = {                                                                    \
-      .y_offset = 0                                                            \
-    }                                                                          \
-  }
-
 typedef struct {
   int tamanho;
   char *buf;
 } OutputBuffer;
+
+void Menu_InitContexto(ContextoMenu *ctx, Terminal *terminal) {
+  ctx->arquivos = NULL;
+  ctx->quantidade_arquivos = 0;
+  ctx->cursor.x = 1;
+  ctx->cursor.y = 2;
+  ctx->jt.y_offset = 0;
+  ctx->jt.area_texto.inicio = 2;
+  ctx->jt.area_texto.fim = terminal->linhas - 2;
+}
 
 void Menu_EscreverBufferTela(OutputBuffer *b, char *texto, int tamanho) {
   char *novo_buf = (char *)realloc(b->buf, b->tamanho + tamanho);
@@ -58,12 +66,26 @@ void Menu_AtualizarTela(ContextoMenu *m, Terminal *terminal) {
 
   Menu_EscreverBufferTela(&b, "\x1b[H", 3);
   for (int i = 0; i < terminal->linhas; i++) {
-    int j = i + m->jt.y_offset;
-    if (j < m->quantidade_arquivos) {
-      Menu_EscreverBufferTela(&b, m->arquivos[j].nome,
-                              m->arquivos[j].tamanho_nome);
+    if (i == 0) {
+      char texto_cabecalho[] =
+          "\x1b[47m\x1b[1;30mMenu - Escolher Arquivo\x1b[0m";
+      Menu_EscreverBufferTela(&b, texto_cabecalho, strlen(texto_cabecalho));
+    } else if (i == terminal->linhas - 1) {
+      char texto_rodape[] =
+          "\x1b[47m\x1b[1;30mq - Sair | <Enter> - Escolher\x1b[0m";
+      Menu_EscreverBufferTela(&b, texto_rodape, strlen(texto_rodape));
     } else {
-      Menu_EscreverBufferTela(&b, "-", 1);
+      int j = i + m->jt.y_offset - 1;
+      if (j < m->quantidade_arquivos) {
+        if (m->arquivos[j].tamanho_nome <= terminal->colunas) {
+          Menu_EscreverBufferTela(&b, m->arquivos[j].nome,
+                                  m->arquivos[j].tamanho_nome);
+        } else {
+          Menu_EscreverBufferTela(&b, m->arquivos[j].nome, terminal->colunas);
+        }
+      } else {
+        Menu_EscreverBufferTela(&b, "-", 1);
+      }
     }
 
     Menu_EscreverBufferTela(&b, "\x1b[K", 3);
@@ -85,11 +107,12 @@ void Menu_ValidarNavegacao(ContextoMenu *m, Terminal *terminal) {
   assert(m->jt.y_offset >= 0);
   assert(m->cursor.y > 0);
   assert(m->cursor.y <= terminal->linhas);
-  assert(m->jt.y_offset + m->cursor.y < m->quantidade_arquivos + 1);
+  assert(m->jt.y_offset + m->cursor.y - 1 < m->quantidade_arquivos + 1);
 }
 
 void Menu(Terminal *terminal, char **buf_nome_arquivo) {
-  ContextoMenu m = INIT_CONTEXTOMENU;
+  ContextoMenu m;
+  Menu_InitContexto(&m, terminal);
   glob_t files;
   glob("*.*", 0, NULL, &files);
   if (files.gl_pathc == 0) {
@@ -127,16 +150,16 @@ void Menu(Terminal *terminal, char **buf_nome_arquivo) {
         Menu_ValidarNavegacao(&m, terminal);
         switch (proximos_caracteres[1]) {
         case 'A':
-          if (m.cursor.y > 1) {
+          if (m.cursor.y > m.jt.area_texto.inicio) {
             m.cursor.y--;
-          } else if ((m.cursor.y == 1) && (m.jt.y_offset > 0)) {
+          } else if ((m.cursor.y == 2) && (m.jt.y_offset > 0)) {
             m.jt.y_offset--;
           }
           break;
 
         case 'B':
-          if (m.cursor.y + m.jt.y_offset < m.quantidade_arquivos) {
-            if (m.cursor.y < terminal->linhas) {
+          if (m.cursor.y + m.jt.y_offset - 1 < m.quantidade_arquivos) {
+            if (m.cursor.y <= m.jt.area_texto.fim) {
               m.cursor.y++;
             } else {
               m.jt.y_offset++;
@@ -146,7 +169,7 @@ void Menu(Terminal *terminal, char **buf_nome_arquivo) {
         }
       }
     } else if (caractere_lido == '\r') {
-      int escolhido = m.jt.y_offset + m.cursor.y - 1;
+      int escolhido = m.jt.y_offset + m.cursor.y - 2;
       char *buf = (char *)malloc(m.arquivos[escolhido].tamanho_nome);
       *buf_nome_arquivo = buf;
       strncpy(*buf_nome_arquivo, m.arquivos[escolhido].nome,

@@ -17,6 +17,11 @@ typedef struct {
 } PosicaoCursor;
 
 typedef struct {
+  int inicio;
+  int fim;
+} AreaConteudo;
+
+typedef struct {
   int numero_caracteres;
   char *caracteres;
 } Linha;
@@ -24,14 +29,15 @@ typedef struct {
 typedef struct {
   int numero_linhas;
   Linha *linhas;
-  int linha_no_topo_da_tela;
-  int coluna_no_inicio_da_tela;
+  int y_offset;
+  int x_offset;
 } Texto;
 
 typedef struct {
   PosicaoCursor cursor;
   Texto txt;
-} TextoAberto;
+  AreaConteudo area_conteudo;
+} ContextoEditor;
 
 typedef struct {
   int tamanho;
@@ -48,38 +54,66 @@ void EscreverNoOutputBuffer(OutputBuffer *b, char *conteudo, int tamanho) {
   b->tamanho += tamanho;
 }
 
-void AtualizarTela(Texto *txt, PosicaoCursor *cursor, Terminal *terminal) {
+void InitContextoEditor(ContextoEditor *ctx, Terminal *terminal) {
+  ctx->area_conteudo.inicio = 2;
+  ctx->area_conteudo.fim = terminal->linhas - 1;
+  ctx->cursor.x = 1;
+  ctx->cursor.y = ctx->area_conteudo.inicio;
+  ctx->txt.numero_linhas = 0;
+  ctx->txt.y_offset = 0;
+  ctx->txt.x_offset = 0;
+  ctx->txt.linhas = (Linha *)malloc(sizeof(Linha));
+}
+
+void AtualizarTela(ContextoEditor *ctx, Terminal *terminal,
+                   char *nome_arquivo) {
   int ok = 0;
 
   OutputBuffer b = {.buf = NULL, .tamanho = 0};
 
   EscreverNoOutputBuffer(&b, "\x1b[H", 3);
 
-  for (int i = 0; i < terminal->linhas; i++) {
-    int j = i + txt->linha_no_topo_da_tela;
-    if (j < txt->numero_linhas) {
-      Linha *l = &txt->linhas[j];
-      if (l->numero_caracteres - txt->coluna_no_inicio_da_tela > 0) {
-        int bp = l->numero_caracteres - txt->coluna_no_inicio_da_tela;
-        if (bp > terminal->colunas) {
-          bp = terminal->colunas;
-        }
-        EscreverNoOutputBuffer(
-            &b, &l->caracteres[txt->coluna_no_inicio_da_tela], bp);
-      }
+  int indice_linha_terminal = 1;
+  int indice_y_texto = ctx->txt.y_offset;
+  while (indice_linha_terminal <= terminal->linhas) {
+    if (indice_linha_terminal == 1) {
+      EscreverNoOutputBuffer(&b, "\x1b[47m\x1b[1;30m",
+                             strlen("\x1b[47m\x1b[1;30m"));
+
+      EscreverNoOutputBuffer(&b, nome_arquivo, strlen(nome_arquivo));
+
+      EscreverNoOutputBuffer(&b, "\x1b[0m", strlen("\x1b[0m"));
+    } else if (indice_linha_terminal == terminal->linhas) {
+      char rodape[] = "\x1b[47m\x1b[1;30mq - Sair | Setas - Navegação\x1b[0m";
+      EscreverNoOutputBuffer(&b, rodape, strlen(rodape));
     } else {
-      EscreverNoOutputBuffer(&b, "~", 1);
+      if (indice_y_texto < ctx->txt.numero_linhas) {
+        Linha *l = &ctx->txt.linhas[indice_y_texto];
+        if (l->numero_caracteres - ctx->txt.x_offset > 0) {
+          int bp = l->numero_caracteres - ctx->txt.x_offset;
+          if (bp > terminal->colunas) {
+            bp = terminal->colunas;
+          }
+          EscreverNoOutputBuffer(&b, &l->caracteres[ctx->txt.x_offset], bp);
+        }
+
+        indice_y_texto++;
+
+      } else {
+        EscreverNoOutputBuffer(&b, "~", 1);
+      }
     }
 
     EscreverNoOutputBuffer(&b, "\x1b[K", 3);
-    if (i < terminal->linhas - 1) {
+    if (indice_linha_terminal <= ctx->area_conteudo.fim) {
       EscreverNoOutputBuffer(&b, "\r\n", 2);
     }
+    indice_linha_terminal++;
   }
 
   char recolocar_cursor[32];
   ok = snprintf(recolocar_cursor, sizeof(recolocar_cursor), "\x1b[%d;%dH",
-                cursor->y, cursor->x);
+                ctx->cursor.y, ctx->cursor.x);
   if (ok == -1) {
     crash("snprintf");
   }
@@ -101,7 +135,7 @@ void AbrirArquivo(char *caminho, Texto *txt) {
   }
 
   txt->numero_linhas = 0;
-  txt->linha_no_topo_da_tela = 0;
+  txt->y_offset = 0;
 
   while (1) {
     char *linha = NULL;
@@ -133,15 +167,12 @@ void AbrirArquivo(char *caminho, Texto *txt) {
 }
 
 void Editor(char *arquivo, Terminal *terminal) {
-  TextoAberto ta = {.cursor = {.x = 1, .y = 1},
-                    .txt = {.numero_linhas = 0,
-                            .linha_no_topo_da_tela = 0,
-                            .coluna_no_inicio_da_tela = 0,
-                            .linhas = (Linha *)malloc(sizeof(Linha))}};
+  ContextoEditor ta;
+  InitContextoEditor(&ta, terminal);
 
   AbrirArquivo(arquivo, &ta.txt);
   while (1) {
-    AtualizarTela(&ta.txt, &ta.cursor, terminal);
+    AtualizarTela(&ta, terminal, arquivo);
     char caractere_recebido = '\0';
     int bytes_lidos = read(STDIN_FILENO, &caractere_recebido, 1);
     if (bytes_lidos == -1) {
@@ -173,40 +204,36 @@ void Editor(char *arquivo, Terminal *terminal) {
 
       if (proximos_caracteres[0] == '[') {
         int indice_linha_cursor =
-            ta.txt.linha_no_topo_da_tela + ta.cursor.y - 1;
+            ta.txt.y_offset + ta.cursor.y - ta.area_conteudo.inicio;
+
+        int numero_de_caracteres_menos_offset_coluna =
+            ta.txt.linhas[indice_linha_cursor].numero_caracteres -
+            ta.txt.x_offset;
 
         assert(indice_linha_cursor >= 0 &&
                indice_linha_cursor <= ta.txt.numero_linhas);
-
-        Linha *linha_texto_onde_cursor_esta =
-            &ta.txt.linhas[indice_linha_cursor];
-        int numero_de_caracteres_menos_offset_coluna =
-            linha_texto_onde_cursor_esta->numero_caracteres -
-            ta.txt.coluna_no_inicio_da_tela;
-
         assert(ta.cursor.y > 0 && ta.cursor.y <= terminal->linhas);
         assert(ta.cursor.x > 0 && ta.cursor.x <= terminal->colunas);
 
         switch (proximos_caracteres[1]) {
         case 'A':
-          if (ta.cursor.y > 1) {
+          if (ta.cursor.y > ta.area_conteudo.inicio) {
             ta.cursor.y--;
-          } else if (ta.txt.linha_no_topo_da_tela > 0) {
-            ta.txt.linha_no_topo_da_tela--;
+          } else if (ta.txt.y_offset > 0) {
+            ta.txt.y_offset--;
           }
           break;
 
         case 'B':
-          if (ta.cursor.y < terminal->linhas &&
+          if (ta.cursor.y <= ta.area_conteudo.fim &&
               (indice_linha_cursor < ta.txt.numero_linhas)) {
             ta.cursor.y++;
             break;
           }
 
-          if ((ta.txt.linha_no_topo_da_tela < ta.txt.numero_linhas) &&
-              (terminal->linhas + ta.txt.linha_no_topo_da_tela <
-               ta.txt.numero_linhas)) {
-            ta.txt.linha_no_topo_da_tela++;
+          if ((ta.txt.y_offset < ta.txt.numero_linhas) &&
+              (terminal->linhas + ta.txt.y_offset < ta.txt.numero_linhas)) {
+            ta.txt.y_offset++;
             break;
           }
           break;
@@ -221,8 +248,9 @@ void Editor(char *arquivo, Terminal *terminal) {
           if (ta.cursor.x >= numero_de_caracteres_menos_offset_coluna + 1 &&
               (indice_linha_cursor < ta.txt.numero_linhas)) {
             ta.cursor.x = 1;
-            if (ta.cursor.y == terminal->linhas) {
-              ta.txt.linha_no_topo_da_tela++;
+            ta.txt.x_offset = 0;
+            if (ta.cursor.y == ta.area_conteudo.fim) {
+              ta.txt.y_offset++;
             } else {
               ta.cursor.y++;
             }
@@ -231,7 +259,7 @@ void Editor(char *arquivo, Terminal *terminal) {
 
           if ((numero_de_caracteres_menos_offset_coluna + 1 > ta.cursor.x) &&
               (ta.cursor.x == terminal->colunas)) {
-            ta.txt.coluna_no_inicio_da_tela++;
+            ta.txt.x_offset++;
             break;
           }
           break;
@@ -242,16 +270,16 @@ void Editor(char *arquivo, Terminal *terminal) {
             break;
           }
 
-          if (ta.cursor.x == 1 && ta.txt.coluna_no_inicio_da_tela > 0) {
-            ta.txt.coluna_no_inicio_da_tela--;
+          if (ta.cursor.x == 1 && ta.txt.x_offset > 0) {
+            ta.txt.x_offset--;
             break;
           }
 
-          if (ta.cursor.x == 1 && ta.txt.coluna_no_inicio_da_tela == 0 &&
+          if (ta.cursor.x == 1 && ta.txt.x_offset == 0 &&
               indice_linha_cursor > 0) {
             indice_linha_cursor--;
-            if (ta.cursor.y == 1) {
-              ta.txt.linha_no_topo_da_tela--;
+            if (ta.cursor.y == ta.area_conteudo.inicio) {
+              ta.txt.y_offset--;
             } else {
               ta.cursor.y--;
             }
@@ -260,8 +288,7 @@ void Editor(char *arquivo, Terminal *terminal) {
                 ta.txt.linhas[indice_linha_cursor].numero_caracteres + 1 -
                 terminal->colunas;
             if (diferenca_numero_caracteres_vs_tela > 0) {
-              ta.txt.coluna_no_inicio_da_tela =
-                  diferenca_numero_caracteres_vs_tela;
+              ta.txt.x_offset = diferenca_numero_caracteres_vs_tela;
               ta.cursor.x =
                   ta.txt.linhas[indice_linha_cursor].numero_caracteres -
                   diferenca_numero_caracteres_vs_tela + 1;
